@@ -45,6 +45,12 @@ const (
     SERVICE_CONTROL_SHUTDOWN  = 0x00000005
 
     INFINITE                  = 0xFFFFFFFF
+
+    EVENTLOG_ERROR_TYPE       = 0x0001
+    EVENTLOG_WARNING_TYPE     = 0x0002
+    EVENTLOG_INFORMATION_TYPE = 0x0004
+    EVENTLOG_AUDIT_SUCCESS    = 0x0008
+    EVENTLOG_AUDIT_FAILURE    = 0x0010
 )
 
 var (
@@ -57,10 +63,15 @@ var (
     procRegisterServiceCtrl   = modAdvapi32.NewProc("RegisterServiceCtrlHandlerW")
     procSetServiceStatus      = modAdvapi32.NewProc("SetServiceStatus")
     procStartServiceCtrlDisp  = modAdvapi32.NewProc("StartServiceCtrlDispatcherW")
+    procRegisterEventSourceW  = modAdvapi32.NewProc("RegisterEventSourceW")
+    procDeregisterEventSource = modAdvapi32.NewProc("DeregisterEventSource")
+    procReportEvent           = modAdvapi32.NewProc("ReportEventW")
 
     serviceStopEvent          syscall.Handle
     serviceStatusHandle       uintptr
     serviceCurrentStatus      SERVICE_STATUS
+
+    service_name              = "MinimalGoService"
 )
 
 type SERVICE_STATUS struct {
@@ -79,7 +90,7 @@ type SERVICE_TABLE_ENTRY struct {
 }
 
 func main() {
-    serviceName := syscall.StringToUTF16Ptr("MinimalGoService")
+    serviceName := syscall.StringToUTF16Ptr(service_name)
 
     serviceTable := []SERVICE_TABLE_ENTRY{
         {lpServiceName: serviceName, lpServiceProc: syscall.NewCallback(serviceMain)},
@@ -94,7 +105,7 @@ func main() {
 
 func serviceMain(argc uint32, argv **uint16) uintptr {
     serviceStatusHandle, _, _ = procRegisterServiceCtrl.Call(
-        uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr("MinimalGoService"))),
+        uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr(service_name))),
         syscall.NewCallback(serviceControlHandler),
     )
 
@@ -112,7 +123,7 @@ func serviceMain(argc uint32, argv **uint16) uintptr {
 
     setServiceStatus(SERVICE_START_PENDING)
 
-    go run()
+    go run(24 * time.Hour, callback)
 
     setServiceStatus(SERVICE_RUNNING)
 
@@ -151,7 +162,34 @@ func setServiceStatus(state uint32) {
 func run(duration time.Duration, callback func()) {
     for {
         start := time.Now()
+        write_event_log("Start " + service_name)
         callback()
+        write_event_log(service_name + " end")
         time.Sleep(duration - time.Since(start))
     }
+}
+
+func write_event_log (log string) {
+    handle, _, err := procRegisterEventSourceW.Call(0, uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr(service_name))))
+    if handle == 0 {
+        fmt.Printf("Failed to get handle to event log: %v\n", err)
+        return
+    }
+
+    message_pointer := syscall.StringToUTF16Ptr(log)
+    messages_pointer := [1]*uint16{message_pointer}
+
+    ret, _, err := procReportEvent.Call(handle, EVENTLOG_INFORMATION_TYPE, 0, 0x1000, 0, 1, 0, uintptr(unsafe.Pointer(&messages_pointer[0])), 0)
+    if ret == 0 {
+        fmt.Printf("Failed to write event: %v\n", err)
+    } else {
+        fmt.Println("Event written successfully.")
+    }
+
+    procDeregisterEventSource.Call(handle)
+}
+
+// replace with your function (it's recommended to import your function)
+func callback () {
+
 }
